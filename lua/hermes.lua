@@ -205,11 +205,20 @@ function M.edit_selection()
   -- Show loading notification
   vim.notify("🔄 Editing with Hermes...", vim.log.levels.INFO)
 
+  -- Get file path
+  local file_path = vim.api.nvim_buf_get_name(0)
+  if #file_path == 0 then
+    file_path = "untitled"
+  end
+
   -- Call Hermes CLI with context
   local cmd = string.format(
-    '%s -z "Edit this code: %s\\n\\nCode:\\n%s"',
+    '%s -z "Edit this code in file %s: %s\\n\\nSelected code (lines %d-%d):\\n%s"',
     M.config.hermes_cmd,
+    vim.fn.shellescape(file_path),
     vim.fn.shellescape(instruction),
+    start_line,
+    end_line,
     vim.fn.shellescape(selected_text)
   )
 
