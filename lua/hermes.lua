@@ -383,18 +383,32 @@ function M.edit_file()
   local prompt = ("In the file %s, please make this change:\n%s\n\nThe full file content is:\n\n```\n%s\n```")
     :format(path, instr, text)
 
+  local stderr = {}
   vim.fn.jobstart("PYTHONUNBUFFERED=1 " .. M.config.hermes_cmd
     .. " chat -q " .. vim.fn.shellescape(prompt) .. " --quiet --yolo", {
     stdout_buffered = true,
+    stderr_buffered = true,
+    on_stderr = function(_, d)
+      if d then for _, l in ipairs(d) do table.insert(stderr, l) end end
+    end,
     on_exit = function(_, code)
-      if code == 0 then
-        local saved_line = vim.fn.line(".")
-        vim.cmd("edit!")
-        pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
-        vim.cmd("normal! zz")
-        vim.notify("✓ Hermes: done", vim.log.levels.INFO)
-      else
-        vim.notify("⚠ Hermes fix failed (" .. code .. ")", vim.log.levels.ERROR)
+      local ok, err = pcall(function()
+        if code == 0 then
+          local saved_line = vim.fn.line(".")
+          vim.cmd("edit!")
+          pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
+          vim.cmd("normal! zz")
+          vim.notify("✓ Hermes: done", vim.log.levels.INFO)
+        else
+          local detail = ""
+          if #stderr > 0 then
+            detail = ": " .. table.concat(stderr, " | "):gsub("^%s*(.-)%s*$", "%1"):sub(1, 200)
+          end
+          vim.notify("⚠ Hermes fix failed (" .. code .. ")" .. detail, vim.log.levels.ERROR)
+        end
+      end)
+      if not ok then
+        vim.notify("Hermes: internal error: " .. tostring(err), vim.log.levels.ERROR)
       end
     end,
   })
