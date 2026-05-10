@@ -12,7 +12,7 @@ M.config = {
 
 -- ── internal state ──────────────────────────────────────────
 
-local state = { buf = nil, win = nil, job = nil, timer = nil }
+local state = { buf = nil, win = nil, job = nil, timer = nil, header_lines = 0 }
 
 local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 
@@ -59,9 +59,16 @@ local function append(buf, lines)
 end
 
 local function get_model()
-  local ok, out = pcall(vim.fn.system,
-    "hermes config show 2>/dev/null | sed -n '/Model:/{s/.*default.*: //;s/\"//gp}'")
-  return ok and vim.trim(out or "") ~= "" and vim.trim(out) or "?"
+  local ok, out = pcall(vim.fn.system, "hermes config show 2>/dev/null")
+  if not ok or out == "" then return "?" end
+  -- extract model from "Model: ..." line in the output
+  for line in out:gmatch("[^\n]+") do
+    local m = line:match("default.*: '([^']+)'")
+    if m then return m end
+    m = line:match("default.*: ([%w/._-]+)")
+    if m then return m end
+  end
+  return "?"
 end
 
 local function scroll_bottom(win)
@@ -98,16 +105,24 @@ function M.open_chat()
   km("n", "<CR>",    "<cmd>lua require('hermes').send_message()<CR>")
   km("i", "<CR>",    "<cmd>lua require('hermes').send_message()<CR>")
 
+  local model = get_model()
+  local model_line = "║  Model: " .. model .. string.rep(" ", 35 - #model) .. "║"
+
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, {
     "╔═══════════════════════════════════════════╗",
     "║        Hermes Agent Chat                 ║",
-    "║  Model: " .. get_model() .. string.rep(" ", 35 - #get_model()) .. "║",
+    model_line,
     "╚═══════════════════════════════════════════╝",
     "",
     "  Type below and press Enter  |  q = close",
     "",
   })
-  vim.bo[state.buf].modifiable = true
+  -- track header size so send_message knows where input starts
+  state.header_lines = 7
+
+  -- start in insert mode on the input line
+  vim.api.nvim_win_set_cursor(state.win, { state.header_lines + 1, 0 })
+  vim.cmd("startinsert!")
 end
 
 function M.close_chat()
@@ -128,36 +143,27 @@ function M.send_message()
     return
   end
 
-  -- grab the last non-blank line as the user's message
+  -- get cursor position (1-indexed row) and read that line as the message
+  local cursor = vim.api.nvim_win_get_cursor(state.win)
+  local row = cursor[1]
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local msg = ""
-  for i = #lines, 1, -1 do
-    local t = vim.trim(lines[i])
-    if t ~= "" and not t:find("^[╔╚║╗]") then
-      msg = t
-      break
-    end
-  end
+  local msg = vim.trim(lines[row] or "")
+
   if msg == "" then
     vim.notify("Hermes: nothing to send", vim.log.levels.WARN)
     return
   end
 
-  -- strip the input line so the user can keep typing after
-  for i = #lines, 1, -1 do
-    if vim.trim(lines[i]) == msg then
-      lines[i] = ""
-      break
-    end
-  end
+  -- clear the input line
+  lines[row] = ""
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
+  -- append user message + thinking indicator
   append(buf, { "You: " .. msg, "⠋ Thinking..." })
   scroll_bottom(state.win)
   spinner_start(buf)
 
-  local escaped = vim.fn.shellescape(msg)
-  local cmd = M.config.hermes_cmd .. " chat -q " .. escaped .. " --quiet"
+  local cmd = M.config.hermes_cmd .. " chat -q " .. vim.fn.shellescape(msg) .. " --quiet"
   local stdout, stderr = {}, {}
 
   state.job = vim.fn.jobstart(cmd, {
@@ -191,11 +197,15 @@ function M.send_message()
         if l ~= "" then table.insert(cur, "  " .. l) end
       end
       table.insert(cur, "")
-      table.insert(cur, "───")
-      table.insert(cur, "")
 
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, cur)
       scroll_bottom(state.win)
+
+      -- add a fresh blank input line and go back to insert
+      local n = vim.api.nvim_buf_line_count(buf)
+      vim.api.nvim_buf_set_lines(buf, n, n, false, { "" })
+      vim.api.nvim_win_set_cursor(state.win, { n + 1, 0 })
+      vim.cmd("startinsert!")
     end,
   })
 
