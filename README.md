@@ -110,6 +110,16 @@ require('hermes').setup({
 })
 ```
 
+### Recommended Model (Free!)
+
+Set Hermes Agent to use the free OpenRouter router:
+
+```bash
+hermes config set model "openrouter/free"
+```
+
+This router automatically selects free models with 200K context.
+
 ## Keymaps
 
 - `<leader>hc` - Open chat panel
