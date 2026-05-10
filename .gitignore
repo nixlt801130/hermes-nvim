@@ -1,0 +1,15 @@
+# Lua
+*.lua
+!lua/hermes.lua
+
+# Neovim
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
