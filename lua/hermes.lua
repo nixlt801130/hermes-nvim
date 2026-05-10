@@ -118,9 +118,17 @@ function M.open_chat()
   vim.api.nvim_buf_set_keymap(chat_buf, "n", "<CR>", ":lua require('hermes').send_message()<CR>", opts)
 
   -- Add header
+  local model_info = ""
+  local ok, model_output = pcall(vim.fn.system, "hermes config show | grep 'Model:' | head -1 | sed 's/.*default.*: //' | tr -d \"'\"")
+  if ok and #model_output > 0 then
+    model_info = "Model: " .. vim.fn.trim(model_output)
+  end
+
   vim.api.nvim_buf_set_lines(chat_buf, 0, -1, false, {
     "Hermes Agent Chat",
     "==================",
+    model_info,
+    "",
     "Type your message and press Enter to send",
     "Press 'q' to close",
     "",
