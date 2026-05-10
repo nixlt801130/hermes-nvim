@@ -34,7 +34,7 @@ local function spinner_start(buf)
       vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { SPINNER[idx] .. " Thinking..." })
     end
     idx = (idx % #SPINNER) + 1
-  end), { "repeat" })
+  end), { repeat = -1 })
 end
 
 local function spinner_stop(buf)
@@ -384,8 +384,10 @@ function M.edit_file()
     :format(path, instr, text)
 
   local stderr = {}
-  vim.fn.jobstart("PYTHONUNBUFFERED=1 " .. M.config.hermes_cmd
-    .. " chat -q " .. vim.fn.shellescape(prompt) .. " --quiet --yolo", {
+  vim.fn.jobstart(
+    { M.config.hermes_cmd, "chat", "-q", prompt, "--quiet", "--yolo" },
+    {
+    env = { PYTHONUNBUFFERED = "1" },
     stdout_buffered = true,
     stderr_buffered = true,
     on_stderr = function(_, d)
