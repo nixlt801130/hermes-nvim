@@ -105,7 +105,7 @@ function M.send_message()
   })
 
   -- Call Hermes CLI
-  local cmd = M.config.hermes_cmd .. " ask " .. vim.fn.shellescape(message)
+  local cmd = M.config.hermes_cmd .. " -z " .. vim.fn.shellescape(message)
   local output = vim.fn.system(cmd)
 
   -- Add Hermes response
@@ -150,7 +150,7 @@ function M.edit_selection()
 
   -- Call Hermes CLI with context
   local cmd = string.format(
-    '%s ask "Edit this code: %s\\n\\nCode:\\n%s"',
+    '%s -z "Edit this code: %s\\n\\nCode:\\n%s"',
     M.config.hermes_cmd,
     vim.fn.shellescape(instruction),
     vim.fn.shellescape(selected_text)
