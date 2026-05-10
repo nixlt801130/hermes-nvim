@@ -54,8 +54,15 @@ end
 -- ── helpers ─────────────────────────────────────────────────
 
 local function append(buf, lines)
+  -- split any line that contains embedded newlines
+  local safe = {}
+  for _, l in ipairs(lines) do
+    for part in l:gmatch("([^\n]*)\n?") do
+      table.insert(safe, part)
+    end
+  end
   local n = vim.api.nvim_buf_line_count(buf)
-  vim.api.nvim_buf_set_lines(buf, n, n, false, lines)
+  vim.api.nvim_buf_set_lines(buf, n, n, false, safe)
 end
 
 local function get_model()
@@ -173,42 +180,53 @@ function M.send_message()
     on_stderr = function(_, d) if d then for _, l in ipairs(d) do table.insert(stderr, l) end end end,
     on_exit = function(_, code)
       state.job = nil
-      spinner_stop(buf)
+      pcall(spinner_stop, buf)
       if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
-      if code ~= 0 then
-        vim.notify("Hermes CLI exit " .. code, vim.log.levels.ERROR)
-        append(buf, { "⚠ Hermes CLI failed (exit " .. code .. ")", "" })
-        scroll_bottom(state.win)
-        return
-      end
-
-      -- remove the "⠋ Thinking..." / "✓ Done" line
-      local cur = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-      for i = #cur, 1, -1 do
-        if cur[i]:match("^[✓⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]") then
-          table.remove(cur, i)
-          break
+      local ok, err = pcall(function()
+        if code ~= 0 then
+          vim.notify("Hermes CLI exit " .. code, vim.log.levels.ERROR)
+          append(buf, { "⚠ Hermes CLI failed (exit " .. code .. ")", "" })
+          scroll_bottom(state.win)
+          return
         end
+
+        -- remove the "⠋ Thinking..." / "✓ Done" line
+        local cur = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        for i = #cur, 1, -1 do
+          if cur[i]:match("^[✓⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]") then
+            table.remove(cur, i)
+            break
+          end
+        end
+
+        table.insert(cur, "Hermes:")
+        for _, l in ipairs(stdout) do
+          if l ~= "" then
+            for part in l:gmatch("([^\n]*)\n?") do
+              table.insert(cur, "  " .. part)
+            end
+          end
+        end
+        table.insert(cur, "")
+
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, cur)
+        scroll_bottom(state.win)
+
+        -- add a fresh blank input line and go back to insert
+        local n = vim.api.nvim_buf_line_count(buf)
+        vim.api.nvim_buf_set_lines(buf, n, n, false, { "" })
+        vim.api.nvim_win_set_cursor(state.win, { n + 1, 0 })
+        vim.cmd("startinsert!")
+
+        -- if Hermes modified any files on disk, pick up the changes
+        pcall(vim.cmd, "checktime")
+      end)
+      if not ok then
+        vim.notify("Hermes: internal error: " .. tostring(err), vim.log.levels.ERROR)
+        append(buf, { "⚠ Plugin error: " .. tostring(err), "" })
+        scroll_bottom(state.win)
       end
-
-      table.insert(cur, "Hermes:")
-      for _, l in ipairs(stdout) do
-        if l ~= "" then table.insert(cur, "  " .. l) end
-      end
-      table.insert(cur, "")
-
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, cur)
-      scroll_bottom(state.win)
-
-      -- add a fresh blank input line and go back to insert
-      local n = vim.api.nvim_buf_line_count(buf)
-      vim.api.nvim_buf_set_lines(buf, n, n, false, { "" })
-      vim.api.nvim_win_set_cursor(state.win, { n + 1, 0 })
-      vim.cmd("startinsert!")
-
-      -- if Hermes modified any files on disk, pick up the changes
-      pcall(vim.cmd, "checktime")
     end,
   })
 
