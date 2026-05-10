@@ -360,7 +360,7 @@ function M.edit_selection()
         vim.notify("⚠ Hermes edit failed (" .. code .. ")", vim.log.levels.ERROR)
       end
     end,
-  }))
+  })
 end
 
 -- ── edit file (no selection needed) ────────────────────────
