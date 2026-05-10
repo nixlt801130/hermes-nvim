@@ -4,15 +4,16 @@
 local M = {}
 
 M.config = {
-  chat_window = "right",   -- "right" or "bottom"
-  chat_width  = 60,
-  chat_height = 20,
-  hermes_cmd  = "hermes",
+  chat_window  = "right",   -- "right" or "bottom"
+  chat_width   = 60,
+  chat_height  = 20,
+  hermes_cmd   = "hermes",
+  send_context = true,      -- auto-prefix current file/cursor info to chat
 }
 
 -- ── internal state ──────────────────────────────────────────
 
-local state = { buf = nil, win = nil, job = nil, timer = nil, header_lines = 0 }
+local state = { buf = nil, win = nil, job = nil, timer = nil, header_lines = 0, context_file = nil, context_line = nil }
 
 local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 
@@ -94,6 +95,10 @@ end
 -- ── chat window ─────────────────────────────────────────────
 
 function M.open_chat()
+  -- remember which file and line we were editing, so Hermes knows the context
+  state.context_file = vim.api.nvim_buf_get_name(0)
+  state.context_line = vim.fn.line(".")
+
   M.close_chat()
 
   state.buf = vim.api.nvim_create_buf(false, true)
@@ -175,6 +180,12 @@ function M.send_message()
   append(buf, { "You: " .. msg, "⠋ Thinking..." })
   scroll_bottom(state.win)
   spinner_start(buf)
+
+  -- attach file/cursor context so Hermes knows which file we're talking about
+  if M.config.send_context and state.context_file and state.context_file ~= "" then
+    local short = vim.fn.fnamemodify(state.context_file, ":~:.")
+    msg = "[file: " .. short .. " | cursor: line " .. (state.context_line or 1) .. "]\n" .. msg
+  end
 
   -- PYTHONUNBUFFERED forces real-time line-by-line output from Hermes CLI
   local cmd = "PYTHONUNBUFFERED=1 " .. M.config.hermes_cmd
