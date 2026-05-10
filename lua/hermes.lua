@@ -21,11 +21,10 @@ local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇",
 
 local function spinner_start(buf)
   local idx = 1
-  if state.timer then pcall(vim.uv.close, state.timer) end
-  state.timer = vim.uv.new_timer()
-  state.timer:start(100, 100, vim.schedule_wrap(function()
+  if state.timer then pcall(vim.fn.timer_stop, state.timer); state.timer = nil end
+  state.timer = vim.fn.timer_start(100, vim.schedule_wrap(function()
     if not buf or not vim.api.nvim_buf_is_valid(buf) then
-      pcall(vim.uv.close, state.timer)
+      pcall(vim.fn.timer_stop, state.timer)
       state.timer = nil
       return
     end
@@ -35,12 +34,12 @@ local function spinner_start(buf)
       vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { SPINNER[idx] .. " Thinking..." })
     end
     idx = (idx % #SPINNER) + 1
-  end))
+  end), { "repeat" })
 end
 
 local function spinner_stop(buf)
   if state.timer then
-    pcall(vim.uv.close, state.timer)
+    pcall(vim.fn.timer_stop, state.timer)
     state.timer = nil
   end
   if buf and vim.api.nvim_buf_is_valid(buf) then
@@ -145,7 +144,7 @@ end
 
 function M.close_chat()
   if state.job then vim.fn.jobstop(state.job); state.job = nil end
-  if state.timer then pcall(vim.uv.close, state.timer); state.timer = nil end
+  if state.timer then pcall(vim.fn.timer_stop, state.timer); state.timer = nil end
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     vim.api.nvim_win_close(state.win, true)
   end

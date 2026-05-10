@@ -1,145 +1,83 @@
-# Hermes Agent Neovim Plugin
+# Hermes-nvim
 
-Simple Neovim integration for Hermes Agent CLI.
+Neovim plugin for Hermes Agent CLI — coding assistant su chat'u ir inline editing.
 
 ## Features
 
-- **Chat Panel**: Interactive chat with Hermes Agent
-- **Code Editing**: Edit selected text with AI instructions
-- **Simple Commands**: Easy-to-use commands and keymaps
+- **Chat panel** (`<leader>hc`) — floating window, streaming response
+- **Inline edit** (`<leader>he` vizualiai) — pažymėk kodą, nurodai pakeitimą
+- **File context awareness** — automatiškai pasiunčia failo pavadinimą ir kursorių su žinute
+- **checktime auto-reload** — po kiekvieno atsakymo atnaujina buffer'ius iš disko
+- **Spinner animacija** — sukasi kol modelis "galvoja"
+- **Klaidų apsauga** — `pcall` apglota, CLI crash'ai nelaužo plugin'o
+- **Atskiras profilis** — gali naudoti kitą modelį / provider'į nei terminale
 
 ## Installation
 
-### Using lazy.nvim
+### lazy.nvim
 
 ```lua
 {
   "nixlt801130/hermes-nvim",
   config = function()
     require('hermes').setup({
-      chat_window = 'right',  -- 'right' or 'bottom'
-      chat_width = 60,
-      chat_height = 20,
-      hermes_cmd = 'hermes',   -- Hermes CLI command
+      chat_window  = "right",  -- 'right' arba 'bottom'
+      chat_width   = 60,
+      chat_height  = 20,
+      hermes_cmd   = "hermes", -- arba "neovim" jei turi atskirą profilį
+      send_context = true,     -- siųsti failo pavadinimą / kursorių
     })
   end,
 }
 ```
 
-### Using packer.nvim
-
-```lua
-use {
-  'nixlt801130/hermes-nvim',
-  config = function()
-    require('hermes').setup({
-      chat_window = 'right',
-      chat_width = 60,
-      chat_height = 20,
-      hermes_cmd = 'hermes',
-    })
-  end
-}
-```
-
-## Usage
-
-### Chat Panel
-
-Open chat panel:
-```vim
-:HermesChat
-```
-Or press: `<leader>hc`
-
-Close chat panel:
-```vim
-:HermesClose
-```
-Or press: `<leader>hq`
-
-In the chat window:
-- Type your message and press `Enter` to send
-- Press `q` to close
-
-### Code Editing
-
-1. Select text in visual mode
-2. Run:
-```vim
-:HermesEdit
-```
-Or press: `<leader>he`
-3. Enter your edit instruction
-4. The selected text will be replaced with the edited version
-
-### Example Usage
-
-**Chat:**
-```
-You: How do I create a function in Rust?
-Hermes: [AI response]
-```
-
-**Code Editing:**
-1. Select this code:
-```rust
-fn main() {
-    println!("Hello");
-}
-```
-
-2. Run `:HermesEdit`
-3. Enter instruction: "Add error handling"
-4. Result:
-```rust
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Hello");
-    Ok(())
-}
-```
-
-## Configuration
-
-```lua
-require('hermes').setup({
-  chat_window = 'right',  -- 'right' or 'bottom'
-  chat_width = 60,        -- Width of chat window
-  chat_height = 20,       -- Height of chat window
-  hermes_cmd = 'hermes',  -- Hermes CLI command
-})
-```
-
-### Recommended Model (Free!)
-
-Set Hermes Agent to use the free OpenRouter router:
+Jei nori naudoti **atskirą profilį** (pvz. `neovim` su OpenRouter):
 
 ```bash
-hermes config set model "openrouter/free"
+hermes profile create neovim --clone default
+hermes profile set model "openrouter/auto" neovim
+hermes profile set provider openrouter neovim
+hermes profile set compression.enabled false neovim
 ```
 
-This router automatically selects free models with 200K context.
+Tada pasidaryk wrapper'į `~/.local/bin/neovim`:
 
-## Keymaps
+```bash
+#!/bin/bash
+exec hermes --profile neovim "$@"
+```
 
-- `<leader>hc` - Open chat panel
-- `<leader>hq` - Close chat panel
-- `<leader>he` - Edit selected text
+Ir nustatyk `hermes_cmd = "neovim"` setup'e.
+
+## Commands / Keymaps
+
+| Key          | Veiksmas              |
+|-------------|-----------------------|
+| `<leader>hc` | Atidaryti chat panelį |
+| `<leader>hq` | Uždaryti chat panelį  |
+| `<leader>he` | Redaguoti pažymėtą tekstą |
+| `q` (chat)   | Uždaryti chat panelį  |
+
+Chat'e: rašai žinutę, spaudi Enter. Atsakymas streamina į tą patį buffer'į.
+
+## How it works
+
+Kiekviena žinutė siunčiama per `hermes chat -q "..." --quiet`. Plugin'as naudoja `jobstart()` su `stdout_buffered = false` kad gautų atsakymą po dalis, o ne viską iš karto.
+
+Jei `send_context = true`, prieš žinutę pridedamas kontekstas:
+
+```
+[file: ~/Projektai/main.rs | cursor: line 42]
+<tavo žinutė>
+```
+
+Po atsakymo paleidžiamas `checktime`, kad jei Hermes pakeitė failą — pakeitimas matytųsi iškart.
 
 ## Requirements
 
-- Hermes Agent CLI installed and available in PATH
-- Neovim 0.5+
-
-## Next Steps
-
-Future improvements:
-- [ ] Inline suggestions (code completion)
-- [ ] Better chat history
-- [ ] File context awareness
-- [ ] Multi-file editing
-- [ ] Code actions (refactor, explain, fix)
-- [ ] Floating window for quick questions
+- Neovim 0.8+
+- Hermes Agent CLI (`~/.local/bin/hermes`)
+- `hermes` pasiekiamas PATH
 
 ## License
 
