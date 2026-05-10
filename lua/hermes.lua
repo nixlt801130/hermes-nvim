@@ -14,51 +14,56 @@ M.config = {
 -- Chat buffer state
 local chat_buf = nil
 local chat_win = nil
+local current_job = nil
 
--- Loading state
-local loading_timer = nil
-local loading_spinner = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-local loading_index = 1
-local loading_line = 0
+-- Spinner animation
+local spinner_frames = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+local spinner_index = 1
+local spinner_timer = nil
 
--- Start loading animation
-function M.start_loading()
-  if loading_timer then
-    return
+-- Start loading spinner
+local function start_spinner(buf)
+  spinner_index = 1
+  if spinner_timer then
+    spinner_timer:stop()
   end
 
-  loading_index = 1
-  loading_line = #vim.api.nvim_buf_get_lines(chat_buf, 0, -1, false)
-
-  loading_timer = vim.loop.new_timer()
-  loading_timer:start(100, 100, vim.schedule_wrap(function()
-    if not chat_buf or not vim.api.nvim_buf_is_valid(chat_buf) then
-      M.stop_loading()
+  spinner_timer = vim.loop.new_timer()
+  spinner_timer:start(100, 100, vim.schedule_wrap(function()
+    if not buf or not vim.api.nvim_buf_is_valid(buf) then
+      if spinner_timer then
+        spinner_timer:stop()
+        spinner_timer:close()
+        spinner_timer = nil
+      end
       return
     end
 
-    local spinner = loading_spinner[loading_index]
-    loading_index = loading_index % #loading_spinner + 1
-
-    vim.api.nvim_buf_set_lines(chat_buf, loading_line, loading_line + 1, false, {
-      spinner .. " Thinking...",
-    })
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local last_line = #lines
+    if last_line > 0 then
+      vim.api.nvim_buf_set_lines(buf, last_line - 1, last_line, false, {
+        spinner_frames[spinner_index] .. " Thinking..."
+      })
+    end
+    spinner_index = (spinner_index % #spinner_frames) + 1
   end))
 end
 
--- Stop loading animation
-function M.stop_loading()
-  if loading_timer then
-    loading_timer:stop()
-    loading_timer:close()
-    loading_timer = nil
+-- Stop loading spinner
+local function stop_spinner(buf)
+  if spinner_timer then
+    spinner_timer:stop()
+    spinner_timer:close()
+    spinner_timer = nil
   end
 
-  if chat_buf and vim.api.nvim_buf_is_valid(chat_buf) then
-    local lines = vim.api.nvim_buf_get_lines(chat_buf, 0, -1, false)
-    if loading_line < #lines then
-      vim.api.nvim_buf_set_lines(chat_buf, loading_line, loading_line + 1, false, {
-        "✓ Done",
+  if buf and vim.api.nvim_buf_is_valid(buf) then
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local last_line = #lines
+    if last_line > 0 and lines[last_line]:match("^.*Thinking%.%.%.$") then
+      vim.api.nvim_buf_set_lines(buf, last_line - 1, last_line, false, {
+        "✓ Done"
       })
     end
   end
@@ -66,14 +71,15 @@ end
 
 -- Open chat window
 function M.open_chat()
-  -- Close existing chat window if open
+  -- Close existing window if open
   if chat_win and vim.api.nvim_win_is_valid(chat_win) then
     vim.api.nvim_win_close(chat_win, true)
+    chat_win = nil
+    chat_buf = nil
   end
 
-  -- Create new buffer
+  -- Create new buffer (no name to avoid E95)
   chat_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(chat_buf, "Hermes Chat")
   vim.api.nvim_buf_set_option(chat_buf, "buftype", "nofile")
   vim.api.nvim_buf_set_option(chat_buf, "swapfile", false)
   vim.api.nvim_buf_set_option(chat_buf, "modifiable", true)
@@ -123,7 +129,16 @@ end
 
 -- Close chat window
 function M.close_chat()
-  M.stop_loading()
+  if current_job then
+    vim.fn.jobstop(current_job)
+    current_job = nil
+  end
+
+  if spinner_timer then
+    spinner_timer:stop()
+    spinner_timer:close()
+    spinner_timer = nil
+  end
 
   if chat_win and vim.api.nvim_win_is_valid(chat_win) then
     vim.api.nvim_win_close(chat_win, true)
@@ -132,9 +147,9 @@ function M.close_chat()
   end
 end
 
--- Send message to Hermes
+-- Send message to Hermes (async)
 function M.send_message()
-  if not chat_buf then
+  if not chat_buf or not vim.api.nvim_buf_is_valid(chat_buf) then
     vim.notify("Chat window not open", vim.log.levels.ERROR)
     return
   end
@@ -155,28 +170,52 @@ function M.send_message()
     "Hermes: ",
   })
 
-  -- Start loading animation
-  M.start_loading()
+  -- Start spinner
+  start_spinner(chat_buf)
 
-  -- Call Hermes CLI (use chat mode for tool support)
-  local cmd = M.config.hermes_cmd .. " chat -q " .. vim.fn.shellescape(message) .. " --quiet --yolo"
-  local output = vim.fn.system(cmd)
+  -- Call Hermes CLI asynchronously
+  local cmd = M.config.hermes_cmd .. " chat -q " .. vim.fn.shellescape(message) .. " --quiet"
+  local output_lines = {}
 
-  -- Stop loading animation
-  M.stop_loading()
+  current_job = vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    on_stdout = function(_, data)
+      if data then
+        for _, line in ipairs(data) do
+          table.insert(output_lines, line)
+        end
+      end
+    end,
+    on_exit = function(_, exit_code)
+      current_job = nil
+      stop_spinner(chat_buf)
 
-  -- Add Hermes response
-  local new_lines = vim.api.nvim_buf_get_lines(chat_buf, 0, -1, false)
-  local last_line = #new_lines
-  vim.api.nvim_buf_set_lines(chat_buf, last_line, last_line, false, {
-    "",
-    "Hermes: " .. output,
-    "",
-    "────────────────────────────────────────────────────────────",
-    "Type your message and press Enter to send",
-    "Press 'q' to close",
-    "",
+      if exit_code ~= 0 then
+        vim.notify("Hermes CLI failed (exit " .. exit_code .. ")", vim.log.levels.ERROR)
+        return
+      end
+
+      local output = table.concat(output_lines, "\n")
+
+      -- Add Hermes response
+      vim.api.nvim_buf_set_lines(chat_buf, 0, -1, false, {
+        "Hermes Agent Chat",
+        "==================",
+        "You: " .. message,
+        "Hermes: " .. output,
+        "",
+        "────────────────────────────────────────────────────────────",
+        "Type your message and press Enter to send",
+        "Press 'q' to close",
+        "",
+      })
+    end,
   })
+
+  if current_job <= 0 then
+    vim.notify("Failed to start Hermes CLI", vim.log.levels.ERROR)
+    stop_spinner(chat_buf)
+  end
 end
 
 -- Edit selected text with Hermes
@@ -202,16 +241,17 @@ function M.edit_selection()
     return
   end
 
-  -- Show loading notification
-  vim.notify("🔄 Editing with Hermes...", vim.log.levels.INFO)
-
   -- Get file path
   local file_path = vim.api.nvim_buf_get_name(0)
   if #file_path == 0 then
-    file_path = "untitled"
+    vim.notify("Please save the file first", vim.log.levels.WARN)
+    return
   end
 
-  -- Call Hermes CLI with context (use chat mode for tool support)
+  -- Show loading notification
+  vim.notify("🔄 Editing with Hermes...", vim.log.levels.INFO)
+
+  -- Call Hermes CLI - it will directly modify the file via patch tool
   local cmd = string.format(
     '%s chat -q "Edit this code in file %s: %s\\n\\nSelected code (lines %d-%d):\\n%s" --quiet --yolo',
     M.config.hermes_cmd,
@@ -222,12 +262,18 @@ function M.edit_selection()
     vim.fn.shellescape(selected_text)
   )
 
-  local output = vim.fn.system(cmd)
-
-  -- Replace selected text with result
-  vim.api.nvim_buf_set_lines(0, start_line - 1, end_line, false, vim.split(output, "\n"))
-
-  vim.notify("✓ Text edited successfully", vim.log.levels.INFO)
+  vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    on_exit = function(_, exit_code)
+      if exit_code == 0 then
+        -- Reload the file to see changes
+        vim.cmd("e!")
+        vim.notify("✓ Text edited successfully", vim.log.levels.INFO)
+      else
+        vim.notify("✗ Editing failed (exit " .. exit_code .. ")", vim.log.levels.ERROR)
+      end
+    end,
+  })
 end
 
 -- Setup function
