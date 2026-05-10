@@ -9,11 +9,12 @@ M.config = {
   chat_height  = 20,
   hermes_cmd   = "hermes",
   send_context = true,      -- auto-prefix current file/cursor info to chat
+  confirm_edits = true,    -- show diff preview before applying edits
 }
 
 -- ── internal state ──────────────────────────────────────────
 
-local state = { buf = nil, win = nil, job = nil, timer = nil, header_lines = 0, context_file = nil, context_line = nil }
+local state = { buf = nil, win = nil, job = nil, timer = nil, header_lines = 0, context_file = nil, context_line = nil, edit_orig = nil, edit_path = nil }
 
 local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 
@@ -58,6 +59,111 @@ local function spinner_stop(buf)
     if sl then
       vim.api.nvim_buf_set_lines(buf, sl - 1, sl, false, { "✓ Done" })
     end
+  end
+end
+
+-- ── diff preview ───────────────────────────────────────────
+
+local function compute_diff_text(orig, new)
+  if #orig == #new then
+    local same = true
+    for i = 1, #orig do
+      if orig[i] ~= new[i] then same = false; break end
+    end
+    if same then return nil end
+  end
+  local ok, ret = pcall(vim.diff, table.concat(orig, "\n"), table.concat(new, "\n"), { result_type = "unified" })
+  if ok then return ret end
+  return nil
+end
+
+-- show diff in floating window, return boolean
+local function confirm_diff(diff_text, fpath)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].modifiable = true
+
+  local max_w = vim.o.columns - 4
+  local max_h = vim.o.lines - 8
+  local width = math.min(max_w, 100)
+  local height = math.min(max_h, 20)
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    col = math.floor((vim.o.columns - width) / 2),
+    row = 2,
+    style = "minimal",
+    border = "single",
+    title = " Hermes diff — " .. vim.fn.fnamemodify(fpath, ":t") .. " ",
+  })
+
+  local lines = { "│ Changes to " .. fpath .. ":", "│", "" }
+  for _, l in ipairs(vim.split(diff_text, "\n")) do
+    table.insert(lines, l)
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].filetype = "diff"
+
+  vim.cmd("redraw")
+  local choice = vim.fn.confirm("Apply these changes?", "&Yes\n&No", 2, "Question")
+
+  pcall(vim.api.nvim_win_close, win, true)
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  return choice == 1
+end
+
+-- shared edit flow: save orig → run → diff confirm → apply/revert
+local function do_hermes_edit(path, callback)
+  state.edit_orig = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  state.edit_path = path
+  callback()
+end
+
+local function finish_edit()
+  local orig = state.edit_orig
+  local path = state.edit_path
+  state.edit_orig = nil
+  state.edit_path = nil
+  if not orig or not path or not M.config.confirm_edits then
+    vim.cmd("edit!")
+    return true
+  end
+
+  -- Read new file content from disk
+  local f = io.open(path, "r")
+  if not f then vim.cmd("edit!"); return true end
+  local new_str = f:read("*all")
+  f:close()
+  -- vim.split adds trailing empty string for trailing newlines
+  local new_lines = vim.split(new_str, "\n")
+  if #new_lines > 0 and new_lines[#new_lines] == "" then
+    table.remove(new_lines)
+  end
+
+  local diff_text = compute_diff_text(orig, new_lines)
+  if not diff_text then
+    -- No actual changes
+    vim.cmd("edit!")
+    vim.notify("Hermes: no changes made", vim.log.levels.INFO)
+    return false
+  end
+
+  local accepted = confirm_diff(diff_text, path)
+  if accepted then
+    vim.cmd("edit!")
+    vim.notify("✓ Hermes: changes applied", vim.log.levels.INFO)
+    return true
+  else
+    -- Revert: write original back to disk and reload
+    f = io.open(path, "w")
+    f:write(table.concat(orig, "\n"))
+    f:close()
+    vim.cmd("edit!")
+    vim.notify("✗ Hermes: changes reverted", vim.log.levels.INFO)
+    return false
   end
 end
 
@@ -356,21 +462,24 @@ function M.edit_selection()
   local prompt = ("Edit this code in %s (lines %d-%d): %s\n\n```\n%s\n```")
     :format(path, start[1], stop[1], instr, text)
 
-  vim.fn.jobstart(M.config.hermes_cmd .. " chat -q " .. vim.fn.shellescape(prompt)
-    .. " --quiet --yolo", {
-    stdout_buffered = true,
-    on_exit = function(_, code)
-      if code == 0 then
-        local saved_line = vim.fn.line(".")
-        vim.cmd("edit!")
-        pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
-        vim.cmd("normal! zz")
-        vim.notify("✓ Hermes: done", vim.log.levels.INFO)
-      else
-        vim.notify("⚠ Hermes edit failed (" .. code .. ")", vim.log.levels.ERROR)
-      end
-    end,
-  })
+  do_hermes_edit(path, function()
+    vim.fn.jobstart(M.config.hermes_cmd .. " chat -q " .. vim.fn.shellescape(prompt)
+      .. " --quiet --yolo", {
+      stdout_buffered = true,
+      on_exit = function(_, code)
+        if code == 0 then
+          local saved_line = vim.fn.line(".")
+          local applied = finish_edit()
+          if applied then
+            pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
+            vim.cmd("normal! zz")
+          end
+        else
+          vim.notify("⚠ Hermes edit failed (" .. code .. ")", vim.log.levels.ERROR)
+        end
+      end,
+    })
+  end)
 end
 
 -- ── edit file (no selection needed) ────────────────────────
@@ -393,37 +502,40 @@ function M.edit_file()
   local prompt = ("In the file %s, please make this change:\n%s\n\nThe full file content is:\n\n```\n%s\n```")
     :format(path, instr, text)
 
-  local stderr = {}
-  vim.fn.jobstart(
-    { M.config.hermes_cmd, "chat", "-q", prompt, "--quiet", "--yolo" },
-    {
-    env = { PYTHONUNBUFFERED = "1" },
-    stdout_buffered = true,
-    stderr_buffered = true,
-    on_stderr = function(_, d)
-      if d then for _, l in ipairs(d) do table.insert(stderr, l) end end
-    end,
-    on_exit = function(_, code)
-      local ok, err = pcall(function()
-        if code == 0 then
-          local saved_line = vim.fn.line(".")
-          vim.cmd("edit!")
-          pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
-          vim.cmd("normal! zz")
-          vim.notify("✓ Hermes: done", vim.log.levels.INFO)
-        else
-          local detail = ""
-          if #stderr > 0 then
-            detail = ": " .. table.concat(stderr, " | "):gsub("^%s*(.-)%s*$", "%1"):sub(1, 200)
+  do_hermes_edit(path, function()
+    local stderr = {}
+    vim.fn.jobstart(
+      { M.config.hermes_cmd, "chat", "-q", prompt, "--quiet", "--yolo" },
+      {
+      env = { PYTHONUNBUFFERED = "1" },
+      stdout_buffered = true,
+      stderr_buffered = true,
+      on_stderr = function(_, d)
+        if d then for _, l in ipairs(d) do table.insert(stderr, l) end end
+      end,
+      on_exit = function(_, code)
+        local ok, err = pcall(function()
+          if code == 0 then
+            local saved_line = vim.fn.line(".")
+            local applied = finish_edit()
+            if applied then
+              pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
+              vim.cmd("normal! zz")
+            end
+          else
+            local detail = ""
+            if #stderr > 0 then
+              detail = ": " .. table.concat(stderr, " | "):gsub("^%s*(.-)%s*$", "%1"):sub(1, 200)
+            end
+            vim.notify("⚠ Hermes fix failed (" .. code .. ")" .. detail, vim.log.levels.ERROR)
           end
-          vim.notify("⚠ Hermes fix failed (" .. code .. ")" .. detail, vim.log.levels.ERROR)
+        end)
+        if not ok then
+          vim.notify("Hermes: internal error: " .. tostring(err), vim.log.levels.ERROR)
         end
-      end)
-      if not ok then
-        vim.notify("Hermes: internal error: " .. tostring(err), vim.log.levels.ERROR)
-      end
-    end,
-  })
+      end,
+    })
+  end)
 end
 
 -- ── setup ───────────────────────────────────────────────────
