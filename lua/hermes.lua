@@ -360,6 +360,43 @@ function M.edit_selection()
         vim.notify("⚠ Hermes edit failed (" .. code .. ")", vim.log.levels.ERROR)
       end
     end,
+  }))
+end
+
+-- ── edit file (no selection needed) ────────────────────────
+
+function M.edit_file()
+  local path = vim.api.nvim_buf_get_name(0)
+  if path == "" then
+    vim.notify("Hermes: save the file first", vim.log.levels.WARN)
+    return
+  end
+
+  local instr = vim.fn.input("Hermes fix: ")
+  if instr == "" then return end
+
+  vim.notify("🔄 Hermes fixing...", vim.log.levels.INFO)
+
+  local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local text  = table.concat(lines, "\n")
+
+  local prompt = ("In the file %s, please make this change:\n%s\n\nThe full file content is:\n\n```\n%s\n```")
+    :format(path, instr, text)
+
+  vim.fn.jobstart("PYTHONUNBUFFERED=1 " .. M.config.hermes_cmd
+    .. " chat -q " .. vim.fn.shellescape(prompt) .. " --quiet --yolo", {
+    stdout_buffered = true,
+    on_exit = function(_, code)
+      if code == 0 then
+        local saved_line = vim.fn.line(".")
+        vim.cmd("edit!")
+        pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
+        vim.cmd("normal! zz")
+        vim.notify("✓ Hermes: done", vim.log.levels.INFO)
+      else
+        vim.notify("⚠ Hermes fix failed (" .. code .. ")", vim.log.levels.ERROR)
+      end
+    end,
   })
 end
 
@@ -371,10 +408,12 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("HermesChat",  M.open_chat,      {})
   vim.api.nvim_create_user_command("HermesClose",  M.close_chat,     {})
   vim.api.nvim_create_user_command("HermesEdit",   M.edit_selection, { range = true })
+  vim.api.nvim_create_user_command("HermesFix",    M.edit_file,      {})
 
   vim.keymap.set("n", "<leader>hc", "<cmd>HermesChat<CR>",  { noremap = true, silent = true })
   vim.keymap.set("n", "<leader>hq", "<cmd>HermesClose<CR>", { noremap = true, silent = true })
   vim.keymap.set("v", "<leader>he", "<cmd>HermesEdit<CR>",  { noremap = true, silent = true })
+  vim.keymap.set("n", "<leader>hf", "<cmd>HermesFix<CR>",   { noremap = true, silent = true })
 
   vim.notify("Hermes Agent loaded", vim.log.levels.INFO)
 end
