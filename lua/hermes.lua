@@ -197,18 +197,24 @@ function M.send_message()
 
       local output = table.concat(output_lines, "\n")
 
-      -- Add Hermes response
-      vim.api.nvim_buf_set_lines(chat_buf, 0, -1, false, {
+  -- Add Hermes response
+      local response_lines = vim.split(output, "\n")
+      local new_content = {
         "Hermes Agent Chat",
         "==================",
         "You: " .. message,
-        "Hermes: " .. output,
-        "",
-        "────────────────────────────────────────────────────────────",
-        "Type your message and press Enter to send",
-        "Press 'q' to close",
-        "",
-      })
+        "Hermes:",
+      }
+      for _, line in ipairs(response_lines) do
+        table.insert(new_content, line)
+      end
+      table.insert(new_content, "")
+      table.insert(new_content, "────────────────────────────────────────────────────────────")
+      table.insert(new_content, "Type your message and press Enter to send")
+      table.insert(new_content, "Press 'q' to close")
+      table.insert(new_content, "")
+
+      vim.api.nvim_buf_set_lines(chat_buf,0, -1, false, new_content)
     end,
   })
 
