@@ -176,7 +176,9 @@ function M.send_message()
   scroll_bottom(state.win)
   spinner_start(buf)
 
-  local cmd = M.config.hermes_cmd .. " chat -q " .. vim.fn.shellescape(msg) .. " --quiet"
+  -- PYTHONUNBUFFERED forces real-time line-by-line output from Hermes CLI
+  local cmd = "PYTHONUNBUFFERED=1 " .. M.config.hermes_cmd
+    .. " chat -q " .. vim.fn.shellescape(msg) .. " --quiet"
   local stderr = {}
 
   -- streaming state
