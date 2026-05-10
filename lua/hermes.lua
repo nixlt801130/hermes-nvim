@@ -77,7 +77,7 @@ local function compute_diff_text(orig, new)
   return nil
 end
 
--- show diff in floating window, return boolean
+-- show diff in floating window with inline prompt, return boolean
 local function confirm_diff(diff_text, fpath)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
@@ -99,20 +99,42 @@ local function confirm_diff(diff_text, fpath)
     title = " Hermes diff — " .. vim.fn.fnamemodify(fpath, ":t") .. " ",
   })
 
-  local lines = { "│ Changes to " .. fpath .. ":", "│", "" }
+  -- Build lines: diff content + inline prompt footer
+  local lines = {}
   for _, l in ipairs(vim.split(diff_text, "\n")) do
     table.insert(lines, l)
   end
+  table.insert(lines, "")
+  table.insert(lines, string.rep("─", width - 4))
+  table.insert(lines, "  y  = accept this edit")
+  table.insert(lines, "  n / q  = reject this edit")
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
   vim.bo[buf].filetype = "diff"
 
+  vim.api.nvim_set_current_win(win)
   vim.cmd("redraw")
-  local choice = vim.fn.confirm("Apply these changes?", "&Yes\n&No", 2, "Question")
+
+  -- Block and wait for a keypress inside the floating window
+  local choice = nil
+  while choice == nil do
+    local raw = vim.fn.getchar()
+    local char
+    if type(raw) == "number" then
+      char = vim.fn.nr2char(raw)
+    else
+      char = raw
+    end
+    if char == "y" or char == "Y" then
+      choice = true
+    elseif char == "n" or char == "N" or char == "q" or char == "\27" or char == "\r" then
+      choice = false
+    end
+  end
 
   pcall(vim.api.nvim_win_close, win, true)
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
-  return choice == 1
+  return choice
 end
 
 -- shared edit flow: save orig → run → diff confirm → apply/revert
