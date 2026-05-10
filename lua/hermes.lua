@@ -19,6 +19,16 @@ local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇",
 
 -- ── spinner ─────────────────────────────────────────────────
 
+-- search backwards from end of buffer for the spinner line
+local function find_spinner_line(lines)
+  for i = #lines, 1, -1 do
+    if lines[i]:match("^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking") then
+      return i
+    end
+  end
+  return nil
+end
+
 local function spinner_start(buf)
   local idx = 1
   if state.timer then pcall(vim.fn.timer_stop, state.timer); state.timer = nil end
@@ -29,9 +39,9 @@ local function spinner_start(buf)
       return
     end
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    local n = #lines
-    if n > 0 and lines[n]:match("^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking") then
-      vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { SPINNER[idx] .. " Thinking..." })
+    local sl = find_spinner_line(lines)
+    if sl then
+      vim.api.nvim_buf_set_lines(buf, sl - 1, sl, false, { SPINNER[idx] .. " Thinking..." })
     end
     idx = (idx % #SPINNER) + 1
   end), { ["repeat"] = -1 })
@@ -44,9 +54,9 @@ local function spinner_stop(buf)
   end
   if buf and vim.api.nvim_buf_is_valid(buf) then
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    local n = #lines
-    if n > 0 and lines[n]:match("^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking%.%.%.$") then
-      vim.api.nvim_buf_set_lines(buf, n - 1, n, false, { "✓ Done" })
+    local sl = find_spinner_line(lines)
+    if sl then
+      vim.api.nvim_buf_set_lines(buf, sl - 1, sl, false, { "✓ Done" })
     end
   end
 end
