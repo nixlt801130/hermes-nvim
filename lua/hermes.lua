@@ -120,8 +120,8 @@ function M.open_chat()
   -- track header size so send_message knows where input starts
   state.header_lines = 7
 
-  -- start in insert mode on the input line
-  vim.api.nvim_win_set_cursor(state.win, { state.header_lines + 1, 0 })
+  -- start in insert mode on the last (empty input) line
+  vim.api.nvim_win_set_cursor(state.win, { state.header_lines, 0 })
   vim.cmd("startinsert!")
 end
 
