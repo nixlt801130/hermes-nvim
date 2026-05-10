@@ -206,6 +206,9 @@ function M.send_message()
       vim.api.nvim_buf_set_lines(buf, n, n, false, { "" })
       vim.api.nvim_win_set_cursor(state.win, { n + 1, 0 })
       vim.cmd("startinsert!")
+
+      -- if Hermes modified any files on disk, pick up the changes
+      pcall(vim.cmd, "checktime")
     end,
   })
 
@@ -246,7 +249,11 @@ function M.edit_selection()
     stdout_buffered = true,
     on_exit = function(_, code)
       if code == 0 then
+        -- remember approximate cursor line so we don't jump to top
+        local saved_line = vim.fn.line(".")
         vim.cmd("edit!")
+        pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
+        vim.cmd("normal! zz")
         vim.notify("✓ Hermes: done", vim.log.levels.INFO)
       else
         vim.notify("⚠ Hermes edit failed (" .. code .. ")", vim.log.levels.ERROR)
