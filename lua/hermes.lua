@@ -1,5 +1,5 @@
 -- hermes.lua — Hermes Agent Neovim Plugin
--- Async chat + code editing via Hermes CLI
+-- Async chat + streaming + code editing via Hermes CLI
 
 local M = {}
 
@@ -54,7 +54,6 @@ end
 -- ── helpers ─────────────────────────────────────────────────
 
 local function append(buf, lines)
-  -- split any line that contains embedded newlines
   local safe = {}
   for _, l in ipairs(lines) do
     for part in l:gmatch("([^\n]*)\n?") do
@@ -65,10 +64,14 @@ local function append(buf, lines)
   vim.api.nvim_buf_set_lines(buf, n, n, false, safe)
 end
 
+local function scroll_bottom(win)
+  local n = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
+  pcall(vim.api.nvim_win_set_cursor, win, { n, 0 })
+end
+
 local function get_model()
   local ok, out = pcall(vim.fn.system, "hermes config show 2>/dev/null")
   if not ok or out == "" then return "?" end
-  -- extract model from "Model: ..." line in the output
   for line in out:gmatch("[^\n]+") do
     local m = line:match("default.*: '([^']+)'")
     if m then return m end
@@ -78,9 +81,14 @@ local function get_model()
   return "?"
 end
 
-local function scroll_bottom(win)
-  local n = vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win))
-  pcall(vim.api.nvim_win_set_cursor, win, { n, 0 })
+-- remove the first line matching the spinner pattern from a buffer lines table
+local function strip_spinner(lines)
+  for i = #lines, 1, -1 do
+    if lines[i]:match("^[✓⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]") then
+      table.remove(lines, i)
+      return
+    end
+  end
 end
 
 -- ── chat window ─────────────────────────────────────────────
@@ -124,10 +132,8 @@ function M.open_chat()
     "  Type below and press Enter  |  q = close",
     "",
   })
-  -- track header size so send_message knows where input starts
   state.header_lines = 7
 
-  -- start in insert mode on the last (empty input) line
   vim.api.nvim_win_set_cursor(state.win, { state.header_lines, 0 })
   vim.cmd("startinsert!")
 end
@@ -171,51 +177,113 @@ function M.send_message()
   spinner_start(buf)
 
   local cmd = M.config.hermes_cmd .. " chat -q " .. vim.fn.shellescape(msg) .. " --quiet"
-  local stdout, stderr = {}, {}
+  local stderr = {}
+
+  -- streaming state
+  local stream_started = false
+  local partial = ""
 
   state.job = vim.fn.jobstart(cmd, {
-    stdout_buffered = true,
+    stdout_buffered = false,
     stderr_buffered = true,
-    on_stdout = function(_, d) if d then for _, l in ipairs(d) do table.insert(stdout, l) end end end,
-    on_stderr = function(_, d) if d then for _, l in ipairs(d) do table.insert(stderr, l) end end end,
+    on_stdout = function(_, data)
+      if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+      if not data or #data == 0 then return end
+      -- data is an array of lines from the latest chunk.
+      -- The last element may be a partial line (if output doesn't end with \n).
+      -- Neovim handles line splitting but may deliver partial lines at chunk boundaries.
+      local complete = {}
+      for _, l in ipairs(data) do
+        if partial ~= "" then
+          l = partial .. l
+          partial = ""
+        end
+        table.insert(complete, l)
+      end
+      -- If the last element is non-empty, it might be partial — save for next chunk
+      local last = complete[#complete]
+      if last ~= "" then
+        partial = table.remove(complete)
+      end
+      if #complete == 0 then return end
+
+      if not stream_started then
+        stream_started = true
+        spinner_stop(buf)
+        -- Replace the spinner line with "Hermes:" + first content chunk
+        local cur = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        strip_spinner(cur)
+        table.insert(cur, "Hermes:")
+        for _, l in ipairs(complete) do
+          table.insert(cur, "  " .. l)
+        end
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, cur)
+      else
+        -- Append subsequent chunks
+        local add = {}
+        for _, l in ipairs(complete) do
+          table.insert(add, "  " .. l)
+        end
+        append(buf, add)
+      end
+      scroll_bottom(state.win)
+    end,
+    on_stderr = function(_, d)
+      if d then for _, l in ipairs(d) do table.insert(stderr, l) end end
+    end,
     on_exit = function(_, code)
       state.job = nil
-      pcall(spinner_stop, buf)
       if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
 
       local ok, err = pcall(function()
-        if code ~= 0 then
+        -- Flush any remaining partial line
+        if partial ~= "" then
+          if not stream_started then
+            stream_started = true
+            spinner_stop(buf)
+            local cur = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+            strip_spinner(cur)
+            table.insert(cur, "Hermes:")
+            table.insert(cur, "  " .. partial)
+            vim.api.nvim_buf_set_lines(buf, 0, -1, false, cur)
+          else
+            append(buf, { "  " .. partial })
+          end
+          partial = ""
+          scroll_bottom(state.win)
+        end
+
+        if not stream_started then
+          -- No output at all — remove spinner, show result
+          spinner_stop(buf)
+          local cur = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+          strip_spinner(cur)
+          if code ~= 0 then
+            local detail = ""
+            if #stderr > 0 then
+              detail = ": " .. table.concat(stderr, " | "):gsub("^%s*(.-)%s*$", "%1"):sub(1, 200)
+            end
+            vim.notify("Hermes CLI exit " .. code .. detail, vim.log.levels.ERROR)
+            table.insert(cur, "⚠ Hermes CLI failed (exit " .. code .. ")")
+            if stderr[1] then table.insert(cur, "  " .. stderr[1]) end
+          else
+            table.insert(cur, "Hermes:")
+            table.insert(cur, "  _(no output)_")
+          end
+          table.insert(cur, "")
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, cur)
+        elseif code ~= 0 then
+          -- Streaming started but process exited with error
           local detail = ""
           if #stderr > 0 then
             detail = ": " .. table.concat(stderr, " | "):gsub("^%s*(.-)%s*$", "%1"):sub(1, 200)
           end
           vim.notify("Hermes CLI exit " .. code .. detail, vim.log.levels.ERROR)
-          append(buf, { "⚠ Hermes CLI failed (exit " .. code .. ")", stderr[1] or "", "" })
-          scroll_bottom(state.win)
-          return
+          append(buf, { "", "⚠ CLI error (exit " .. code .. ")", "" })
+        else
+          -- Success — stop spinner if still running (shouldn't be, but safety)
+          spinner_stop(buf)
         end
-
-        -- remove the "⠋ Thinking..." / "✓ Done" line
-        local cur = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-        for i = #cur, 1, -1 do
-          if cur[i]:match("^[✓⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]") then
-            table.remove(cur, i)
-            break
-          end
-        end
-
-        table.insert(cur, "Hermes:")
-        for _, l in ipairs(stdout) do
-          if l ~= "" then
-            for part in l:gmatch("([^\n]*)\n?") do
-              table.insert(cur, "  " .. part)
-            end
-          end
-        end
-        table.insert(cur, "")
-
-        vim.api.nvim_buf_set_lines(buf, 0, -1, false, cur)
-        scroll_bottom(state.win)
 
         -- add a fresh blank input line and go back to insert
         local n = vim.api.nvim_buf_line_count(buf)
@@ -228,8 +296,8 @@ function M.send_message()
       end)
       if not ok then
         vim.notify("Hermes: internal error: " .. tostring(err), vim.log.levels.ERROR)
-        append(buf, { "⚠ Plugin error: " .. tostring(err), "" })
-        scroll_bottom(state.win)
+        pcall(append, buf, { "⚠ Plugin error: " .. tostring(err), "" })
+        pcall(scroll_bottom, state.win)
       end
     end,
   })
@@ -271,7 +339,6 @@ function M.edit_selection()
     stdout_buffered = true,
     on_exit = function(_, code)
       if code == 0 then
-        -- remember approximate cursor line so we don't jump to top
         local saved_line = vim.fn.line(".")
         vim.cmd("edit!")
         pcall(vim.api.nvim_win_set_cursor, 0, { saved_line, 0 })
