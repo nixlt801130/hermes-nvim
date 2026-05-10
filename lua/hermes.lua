@@ -158,8 +158,8 @@ function M.send_message()
   -- Start loading animation
   M.start_loading()
 
-  -- Call Hermes CLI
-  local cmd = M.config.hermes_cmd .. " -z " .. vim.fn.shellescape(message)
+  -- Call Hermes CLI (use chat mode for tool support)
+  local cmd = M.config.hermes_cmd .. " chat -q " .. vim.fn.shellescape(message) .. " --quiet --yolo"
   local output = vim.fn.system(cmd)
 
   -- Stop loading animation
@@ -211,9 +211,9 @@ function M.edit_selection()
     file_path = "untitled"
   end
 
-  -- Call Hermes CLI with context
+  -- Call Hermes CLI with context (use chat mode for tool support)
   local cmd = string.format(
-    '%s -z "Edit this code in file %s: %s\\n\\nSelected code (lines %d-%d):\\n%s"',
+    '%s chat -q "Edit this code in file %s: %s\\n\\nSelected code (lines %d-%d):\\n%s" --quiet --yolo',
     M.config.hermes_cmd,
     vim.fn.shellescape(file_path),
     vim.fn.shellescape(instruction),
