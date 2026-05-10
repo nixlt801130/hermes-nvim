@@ -185,8 +185,12 @@ function M.send_message()
 
       local ok, err = pcall(function()
         if code ~= 0 then
-          vim.notify("Hermes CLI exit " .. code, vim.log.levels.ERROR)
-          append(buf, { "⚠ Hermes CLI failed (exit " .. code .. ")", "" })
+          local detail = ""
+          if #stderr > 0 then
+            detail = ": " .. table.concat(stderr, " | "):gsub("^%s*(.-)%s*$", "%1"):sub(1, 200)
+          end
+          vim.notify("Hermes CLI exit " .. code .. detail, vim.log.levels.ERROR)
+          append(buf, { "⚠ Hermes CLI failed (exit " .. code .. ")", stderr[1] or "", "" })
           scroll_bottom(state.win)
           return
         end
