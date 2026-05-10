@@ -14,7 +14,7 @@ M.config = {
 
 -- ── internal state ──────────────────────────────────────────
 
-local state = { buf = nil, win = nil, job = nil, timer = nil, header_lines = 0, context_file = nil, context_line = nil, edit_orig = nil, edit_path = nil }
+local state = { buf = nil, win = nil, job = nil, timer = nil, header_lines = 0, context_file = nil, context_line = nil, edit_orig = nil, edit_path = nil, status_model = nil, start_time = nil }
 
 local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
 
@@ -33,6 +33,7 @@ end
 local function spinner_start(buf)
   local idx = 1
   if state.timer then pcall(vim.fn.timer_stop, state.timer); state.timer = nil end
+  state.start_time = os.time()
   state.timer = vim.fn.timer_start(100, vim.schedule_wrap(function()
     if not buf or not vim.api.nvim_buf_is_valid(buf) then
       pcall(vim.fn.timer_stop, state.timer)
@@ -44,6 +45,22 @@ local function spinner_start(buf)
     if sl then
       vim.api.nvim_buf_set_lines(buf, sl - 1, sl, false, { SPINNER[idx] .. " Thinking..." })
     end
+    -- Update header status line (3rd line, 0-indexed: 2)
+    if state.status_model and state.start_time then
+      local elapsed = math.floor(os.difftime(os.time(), state.start_time))
+      local elapsed_str
+      if elapsed < 60 then
+        elapsed_str = elapsed .. "s"
+      elseif elapsed < 3600 then
+        elapsed_str = math.floor(elapsed / 60) .. "m " .. (elapsed % 60) .. "s"
+      else
+        elapsed_str = math.floor(elapsed / 3600) .. "h " .. math.floor((elapsed % 3600) / 60) .. "m"
+      end
+      local inner = "  " .. state.status_model .. " │ ⏲ " .. elapsed_str
+      local pad = 44 - #inner
+      if pad < 0 then pad = 0 end
+      pcall(vim.api.nvim_buf_set_lines, buf, 2, 3, false, { "║" .. inner .. string.rep(" ", pad) .. "║" })
+    end
     idx = (idx % #SPINNER) + 1
   end), { ["repeat"] = -1 })
 end
@@ -53,7 +70,13 @@ local function spinner_stop(buf)
     pcall(vim.fn.timer_stop, state.timer)
     state.timer = nil
   end
+  state.start_time = nil
   if buf and vim.api.nvim_buf_is_valid(buf) then
+    -- Restore model line in header
+    if state.status_model then
+      local restored = "║  Model: " .. state.status_model .. string.rep(" ", 35 - #state.status_model) .. "║"
+      pcall(vim.api.nvim_buf_set_lines, buf, 2, 3, false, { restored })
+    end
     local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     local sl = find_spinner_line(lines)
     if sl then
@@ -263,6 +286,7 @@ function M.open_chat()
   km("i", "<CR>",    "<cmd>lua require('hermes').send_message()<CR>")
 
   local model = get_model()
+  state.status_model = model
   local model_line = "║  Model: " .. model .. string.rep(" ", 35 - #model) .. "║"
 
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, {
@@ -283,6 +307,7 @@ end
 function M.close_chat()
   if state.job then vim.fn.jobstop(state.job); state.job = nil end
   if state.timer then pcall(vim.fn.timer_stop, state.timer); state.timer = nil end
+  state.start_time = nil
   if state.win and vim.api.nvim_win_is_valid(state.win) then
     vim.api.nvim_win_close(state.win, true)
   end
